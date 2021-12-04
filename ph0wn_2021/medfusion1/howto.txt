@@ -1,0 +1,45 @@
+The challenge is a pentest against a how:
+medfusion.ph0wn.org
+
+this is hosting a medical pump.
+
+First, we can scan the host's available service with nmap:
+nmap medfusion.ph0wn.org
+
+This shows 3 open ports with a FTP (21), telnet (23) and "cdt" (7777) services.
+
+We need to find a way to exploit one of these services to get access to the flag.
+
+Let's start with the FTP.
+We can run an anonymous exploit scan with metasploit.
+This shows the Anonymous user has Read/Write access.
+
+We can login with following command:
+ftp medfusion.ph0wn.org
+
+Creds: anonymous:anonymous
+
+Once logged, we can try to read from the host with "ls".
+We observe the commands hangs.
+The subtility here is to use ftp in passive mode:
+ftp --passive
+or :
+pftp
+
+This time we can read from the host.
+It contains a CONFIG.XML file.
+Little wget command on that and we retrieved the file.
+When opening it, we get a username and password for the port 23:
+
+<Medfusion3600Configuration>
+<TelnetInterface>
+<Port>23</Port>
+<Username>medfusion</Username>
+<Password>chu_ph0wn</Password>
+</TelnetInterface>
+</Medfusion3600Configuration>
+
+We can get access to the telnet service running on port 23.
+There, we'll find the flag for the first part of the challenge, and the base information for the part 2.
+
+

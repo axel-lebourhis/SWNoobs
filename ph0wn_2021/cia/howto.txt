@@ -1,0 +1,34 @@
+CIA login page:
+http://challenges.ph0wn.org:3338/
+ 
+to get the flag, we need to inspect the source code of the page.
+We can see in the source a js script is used: login.js
+
+<script src="login.js"></script>
+
+when opening this js script we can find the username and password:
+if (Username == "NewCIAAgent" && Password == "IlovePh0wnbec@useitss0fun" ) {
+	window.location = "106675dc1490d5cdd6d1f0410731316ce93fc964c6cf6726e2b0d53e19688feb.html";
+}
+else
+{
+...
+}
+
+now we can go back to the login page and enter the creds we just got.
+this open a new html page.
+
+Again, we need to explore the source and we find this:
+<hide "You're pretty smart if you're reading this message: 10001111 10010111 11001111 10001000 10010001 10000100 10001000 10011010 10010011 10011100 11001111 10010010 10011010 10100000 10001011 10010000 10100000 10111100 10110110 10111110 10100000 10000110 10010000 10001010 10010001 11001001 10100000 10011110 11001001 10011010 10010001 10001011 10000010. Be careful, 0 and 1 might have been exchanged... " >
+
+It seems obvious the binary represents a string, the flag we're looking for.
+There's a hint in the message, the 0s and 1s have been swapped.
+
+We can put the original binary string in a text file and run a sed command on it:
+
+sed 's/0/2/g' -e 's/1/0/g' -e 's/2/1/g'
+
+this will swap the 0s and 1s.
+
+Then we can put this in a simple online binary to string converter and we get the flag.
+
